@@ -13,9 +13,7 @@ wheels/
 lmo/
 lmo_visualizations/
 lmo_evaluation/
-lmo_occlusion/
 lmo_compare/
-lmo_pose_analysis/
 segmentation/
 pose/
 lmo_compare_pose/
