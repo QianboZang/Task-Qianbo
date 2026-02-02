@@ -8,6 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Project specific
 lmo/
 lmo_visualizations/
 lmo_evaluation/
@@ -25,4 +27,6 @@ target_object_pointcloud.ply
 task4_pose_results.csv
 task5_pose_failures.csv
 task5_seg_failures.csv
-.DS_Store
+
+# OS generated files
+**/.DS_Store
