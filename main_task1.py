@@ -1,168 +1,265 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+import json
+import os
+from PIL import Image
 
 
-def rgbd_to_pointcloud(rgb_image, depth_image, intrinsics, mask=None):
+# =============================================================================
+# 第一步：读取 LM-O 数据集
+# =============================================================================
+
+def load_lmo_camera(camera_json_path):
+    """读取 LM-O 的相机内参"""
+    with open(camera_json_path, 'r') as f:
+        camera_params = json.load(f)
+    
+    print("=" * 50)
+    print("相机参数 (camera.json):")
+    print("=" * 50)
+    print(f"  f_x = {camera_params['fx']}")
+    print(f"  f_y = {camera_params['fy']}")
+    print(f"  c_x = {camera_params['cx']}")
+    print(f"  c_y = {camera_params['cy']}")
+    print(f"  depth_scale = {camera_params['depth_scale']}")
+    print(f"  width = {camera_params['width']}")
+    print(f"  height = {camera_params['height']}")
+    
+    return camera_params
+
+
+def build_intrinsic_matrix(camera_params):
     """
-    Convert RGBD image to colored 3D point cloud.
+    构建内参矩阵 K
     
-    Parameters
-    ----------
-    rgb_image : np.ndarray
-        RGB image of shape (H, W, 3), values in [0, 255] or [0, 1]
-    depth_image : np.ndarray
-        Depth image of shape (H, W), values in meters
-    intrinsics : dict
-        Camera intrinsic parameters with keys: 'fx', 'fy', 'cx', 'cy'
-        - fx, fy: focal lengths in pixels
-        - cx, cy: principal point coordinates
-    mask : np.ndarray, optional
-        Binary mask of shape (H, W) for the target object 
-        (1 = object, 0 = background)
-    
-    Returns
-    -------
-    points : np.ndarray
-        3D points of shape (N, 3) containing XYZ coordinates
-    colors : np.ndarray
-        RGB colors of shape (N, 3), normalized to [0, 1]
-    
-    Example
-    -------
-    >>> intrinsics = {'fx': 615.0, 'fy': 615.0, 'cx': 320.0, 'cy': 240.0}
-    >>> points, colors = rgbd_to_pointcloud(rgb, depth, intrinsics, mask)
+    K = [fx   0  cx]
+        [ 0  fy  cy]
+        [ 0   0   1]
     """
-    # Extract intrinsic parameters
-    fx, fy = intrinsics['fx'], intrinsics['fy']
-    cx, cy = intrinsics['cx'], intrinsics['cy']
+    f_x = camera_params['fx']
+    f_y = camera_params['fy']
+    c_x = camera_params['cx']
+    c_y = camera_params['cy']
     
-    H, W = depth_image.shape
+    K = np.array([
+        [f_x,   0, c_x],
+        [  0, f_y, c_y],
+        [  0,   0,   1]
+    ], dtype=np.float64)
     
-    # Create pixel coordinate grids
-    u = np.arange(W)
-    v = np.arange(H)
-    u, v = np.meshgrid(u, v)  # u: (H, W), v: (H, W)
+    print("\n内参矩阵 K:")
+    print(K)
     
-    # Back-project to 3D using pinhole camera model
-    Z = depth_image
-    X = (u - cx) * Z / fx
-    Y = (v - cy) * Z / fy
+    return K
+
+
+def compute_K_inverse(K):
+    """
+    计算 K 的逆矩阵
     
-    # Stack into point cloud (H, W, 3)
-    points = np.stack([X, Y, Z], axis=-1)
+    K^(-1) = [1/fx    0    -cx/fx]
+             [  0   1/fy   -cy/fy]
+             [  0     0       1  ]
+    """
+    K_inv = np.linalg.inv(K)
     
-    # Process colors
-    colors = rgb_image.copy().astype(np.float32)
+    print("\nK 的逆矩阵 K^(-1):")
+    print(K_inv)
+    
+    return K_inv
+
+
+def load_rgb_image(rgb_path):
+    """读取 RGB 图像"""
+    rgb_image = np.array(Image.open(rgb_path))
+    print(f"\nRGB 图像: {rgb_path}")
+    print(f"  形状: {rgb_image.shape}, 范围: [{rgb_image.min()}, {rgb_image.max()}]")
+    return rgb_image
+
+
+def load_depth_image(depth_path, depth_scale):
+    """读取深度图并转换为米"""
+    depth_raw = np.array(Image.open(depth_path))
+    depth_in_meters = depth_raw.astype(np.float32) * depth_scale
+    
+    print(f"\n深度图: {depth_path}")
+    print(f"  原始值范围: [{depth_raw.min()}, {depth_raw.max()}]")
+    print(f"  × depth_scale ({depth_scale})")
+    print(f"  转换后范围: [{depth_in_meters.min():.4f}, {depth_in_meters.max():.4f}] 米")
+    
+    return depth_in_meters
+
+
+def load_mask(mask_path):
+    """读取物体掩码"""
+    mask = np.array(Image.open(mask_path))
+    print(f"\n物体掩码: {mask_path}")
+    print(f"  形状: {mask.shape}, 物体像素数: {np.sum(mask > 0)}")
+    return mask
+
+
+# =============================================================================
+# 第二步：使用 K^(-1) 矩阵进行反投影
+# =============================================================================
+
+def rgbd_to_pointcloud_matrix(rgb_image, depth_in_meters, K_inv, camera_params, mask=None):
+    """
+    使用矩阵运算将 RGBD 图像转换为 3D 彩色点云
+    
+    数学公式:
+        [X]            [u]
+        [Y] = Z × K^(-1) × [v]
+        [Z]            [1]
+    
+    参数:
+        rgb_image: (H, W, 3) RGB 图像
+        depth_in_meters: (H, W) 深度图，单位：米
+        K_inv: (3, 3) 内参矩阵的逆
+        camera_params: 相机参数字典
+        mask: (H, W) 物体掩码，可选
+    
+    返回:
+        points: (N, 3) 3D 点坐标
+        colors: (N, 3) RGB 颜色
+    """
+    H = camera_params['height']
+    W = camera_params['width']
+    
+    print("\n" + "=" * 50)
+    print("使用 K^(-1) 矩阵进行反投影")
+    print("=" * 50)
+    
+    # -------------------------------------------------------------------------
+    # 第1步：创建像素坐标的齐次形式
+    # -------------------------------------------------------------------------
+    # u: 列号 (0 到 W-1)
+    # v: 行号 (0 到 H-1)
+    u_coords = np.arange(W)
+    v_coords = np.arange(H)
+    u, v = np.meshgrid(u_coords, v_coords)  # 都是 (H, W)
+    
+    # 创建齐次坐标 [u, v, 1]
+    # ones 形状是 (H, W)
+    ones = np.ones_like(u)
+    
+    # 堆叠成 (3, H, W)
+    # pixel_coords[0] = u
+    # pixel_coords[1] = v
+    # pixel_coords[2] = 1
+    pixel_coords = np.stack([u, v, ones], axis=0)  # (3, H, W)
+    
+    print(f"像素齐次坐标形状: {pixel_coords.shape}")  # (3, H, W)
+    
+    # -------------------------------------------------------------------------
+    # 第2步：应用 K^(-1) 矩阵
+    # -------------------------------------------------------------------------
+    # K_inv: (3, 3)
+    # pixel_coords: (3, H, W)
+    #
+    # 我们需要对每个像素计算: K^(-1) × [u, v, 1]^T
+    #
+    # 方法：reshape pixel_coords 为 (3, H*W)，做矩阵乘法，再 reshape 回来
+    
+    pixel_coords_flat = pixel_coords.reshape(3, -1)  # (3, H*W)
+    
+    # 矩阵乘法: (3, 3) × (3, H*W) = (3, H*W)
+    normalized_coords = K_inv @ pixel_coords_flat  # (3, H*W)
+    
+    # reshape 回 (3, H, W)
+    normalized_coords = normalized_coords.reshape(3, H, W)
+    
+    print(f"归一化坐标形状: {normalized_coords.shape}")  # (3, H, W)
+    
+    # -------------------------------------------------------------------------
+    # 第3步：乘以深度 Z 得到 3D 坐标
+    # -------------------------------------------------------------------------
+    # normalized_coords[0] = (u - cx) / fx
+    # normalized_coords[1] = (v - cy) / fy
+    # normalized_coords[2] = 1
+    #
+    # 3D坐标 = normalized_coords × Z
+    
+    Z = depth_in_meters  # (H, W)
+    
+    X = normalized_coords[0] * Z  # (H, W)
+    Y = normalized_coords[1] * Z  # (H, W)
+    # Z 本身就是深度
+    
+    print(f"\n3D 坐标计算完成:")
+    print(f"  X 形状: {X.shape}")
+    print(f"  Y 形状: {Y.shape}")
+    print(f"  Z 形状: {Z.shape}")
+    
+    # -------------------------------------------------------------------------
+    # 第4步：组合成点云
+    # -------------------------------------------------------------------------
+    points = np.stack([X, Y, Z], axis=-1)  # (H, W, 3)
+    
+    # -------------------------------------------------------------------------
+    # 第5步：处理颜色
+    # -------------------------------------------------------------------------
+    colors = rgb_image.astype(np.float32)
     if colors.max() > 1:
-        colors = colors / 255.0  # Normalize to [0, 1]
+        colors = colors / 255.0
     
-    # Create valid mask
+    # -------------------------------------------------------------------------
+    # 第6步：应用掩码
+    # -------------------------------------------------------------------------
     if mask is not None:
-        valid = (mask > 0) & (depth_image > 0)
+        valid = (mask > 0) & (Z > 0)
     else:
-        valid = depth_image > 0  # Only keep points with valid depth
+        valid = Z > 0
     
-    # Flatten and filter invalid points
-    points = points[valid]
-    colors = colors[valid]
+    points = points[valid]  # (N, 3)
+    colors = colors[valid]  # (N, 3)
+    
+    print(f"\n最终点云:")
+    print(f"  点数: {len(points)}")
+    print(f"  X 范围: [{points[:, 0].min():.4f}, {points[:, 0].max():.4f}] 米")
+    print(f"  Y 范围: [{points[:, 1].min():.4f}, {points[:, 1].max():.4f}] 米")
+    print(f"  Z 范围: [{points[:, 2].min():.4f}, {points[:, 2].max():.4f}] 米")
     
     return points, colors
 
 
-def get_intrinsic_matrix(intrinsics):
-    """
-    Convert intrinsics dict to 3x3 camera intrinsic matrix K.
-    
-    Parameters
-    ----------
-    intrinsics : dict
-        Camera intrinsic parameters with keys: 'fx', 'fy', 'cx', 'cy'
-    
-    Returns
-    -------
-    K : np.ndarray
-        3x3 camera intrinsic matrix
-    """
-    fx, fy = intrinsics['fx'], intrinsics['fy']
-    cx, cy = intrinsics['cx'], intrinsics['cy']
-    
-    K = np.array([
-        [fx,  0, cx],
-        [ 0, fy, cy],
-        [ 0,  0,  1]
-    ])
-    return K
-
-
 # =============================================================================
-# Visualization Functions
+# 第三步：可视化函数
 # =============================================================================
+
 def visualize_input_data(rgb_image, depth_image, mask=None, save_path=None):
-    """
-    Visualize the input RGBD data and mask.
-    
-    Parameters
-    ----------
-    rgb_image : np.ndarray
-        RGB image of shape (H, W, 3)
-    depth_image : np.ndarray
-        Depth image of shape (H, W)
-    mask : np.ndarray, optional
-        Binary mask of shape (H, W)
-    save_path : str, optional
-        Path to save the figure
-    """
+    """可视化输入数据"""
     n_plots = 3 if mask is not None else 2
     fig, axes = plt.subplots(1, n_plots, figsize=(5 * n_plots, 4))
     
-    # RGB image
     axes[0].imshow(rgb_image)
     axes[0].set_title('RGB Image', fontsize=14, fontweight='bold')
     axes[0].axis('off')
     
-    # Depth image
     im = axes[1].imshow(depth_image, cmap='plasma')
-    axes[1].set_title('Depth Image', fontsize=14, fontweight='bold')
+    axes[1].set_title('Depth Image (meters)', fontsize=14, fontweight='bold')
     axes[1].axis('off')
-    cbar = plt.colorbar(im, ax=axes[1], fraction=0.046)
-    cbar.set_label('Depth (meters)', fontsize=10)
+    plt.colorbar(im, ax=axes[1], fraction=0.046, label='Depth (m)')
     
-    # Mask (if provided)
     if mask is not None:
         axes[2].imshow(mask, cmap='gray')
         axes[2].set_title('Object Mask', fontsize=14, fontweight='bold')
         axes[2].axis('off')
     
-    plt.suptitle('Input Data for Point Cloud Generation', fontsize=16, fontweight='bold')
+    plt.suptitle('LM-O Dataset Input Data', fontsize=16, fontweight='bold')
     plt.tight_layout()
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
-        print(f"Saved: {save_path}")
+        print(f"保存: {save_path}")
     
     plt.show()
 
 
-def visualize_colored_pointcloud(points, colors, title="Colored 3D Point Cloud", 
-                                  n_samples=10000, save_path=None):
-    """
-    Visualize colored 3D point cloud from multiple viewpoints.
+def visualize_pointcloud(points, colors, title="3D Point Cloud", 
+                         n_samples=10000, save_path=None):
+    """可视化彩色点云"""
     
-    Parameters
-    ----------
-    points : np.ndarray
-        3D points of shape (N, 3)
-    colors : np.ndarray
-        RGB colors of shape (N, 3), values in [0, 1]
-    title : str
-        Title for the plot
-    n_samples : int
-        Number of points to display (for performance)
-    save_path : str, optional
-        Path to save the figure
-    """
-    # Subsample for faster rendering
     if len(points) > n_samples:
         indices = np.random.choice(len(points), n_samples, replace=False)
         pts = points[indices]
@@ -171,9 +268,8 @@ def visualize_colored_pointcloud(points, colors, title="Colored 3D Point Cloud",
         pts = points
         cols = colors
     
-    fig = plt.figure(figsize=(16, 12))
+    fig = plt.figure(figsize=(14, 12))
     
-    # Define viewpoints: (elevation, azimuth, title)
     viewpoints = [
         (0, 0, 'Front View'),
         (0, 90, 'Side View'),
@@ -184,112 +280,29 @@ def visualize_colored_pointcloud(points, colors, title="Colored 3D Point Cloud",
     for i, (elev, azim, view_title) in enumerate(viewpoints):
         ax = fig.add_subplot(2, 2, i + 1, projection='3d')
         ax.scatter(pts[:, 0], pts[:, 2], pts[:, 1], 
-                   c=cols, s=3, alpha=1.0, edgecolors='none')
-        ax.set_xlabel('X (m)', fontsize=11)
-        ax.set_ylabel('Z - Depth (m)', fontsize=11)
-        ax.set_zlabel('Y (m)', fontsize=11)
-        ax.set_title(view_title, fontsize=13, fontweight='bold')
+                   c=cols, s=2, alpha=1.0, edgecolors='none')
+        ax.set_xlabel('X (m)', fontsize=10, labelpad=8)
+        ax.set_ylabel('Z (m)', fontsize=10, labelpad=8)
+        ax.set_zlabel('Y (m)', fontsize=10, labelpad=8)
+        ax.set_title(view_title, fontsize=13, fontweight='bold', pad=15)
         ax.view_init(elev=elev, azim=azim)
     
-    plt.suptitle(f'{title}\n(Each point colored with original RGB value)', 
-                 fontsize=16, fontweight='bold', y=1.02)
-    plt.tight_layout()
+    plt.suptitle(title, fontsize=16, fontweight='bold')
+    plt.subplots_adjust(left=0.05, right=0.95, top=0.90, bottom=0.05, 
+                        wspace=0.15, hspace=0.2)
     
     if save_path:
         plt.savefig(save_path, dpi=200, bbox_inches='tight', facecolor='white')
-        print(f"Saved: {save_path}")
+        print(f"保存: {save_path}")
     
     plt.show()
 
-
-def visualize_pointcloud_single(points, colors, title="Colored 3D Point Cloud",
-                                 n_samples=15000, elev=20, azim=135, save_path=None):
-    """
-    Visualize colored 3D point cloud from a single viewpoint (high quality).
-    
-    Parameters
-    ----------
-    points : np.ndarray
-        3D points of shape (N, 3)
-    colors : np.ndarray
-        RGB colors of shape (N, 3), values in [0, 1]
-    title : str
-        Title for the plot
-    n_samples : int
-        Number of points to display
-    elev : float
-        Elevation angle for viewing
-    azim : float
-        Azimuth angle for viewing
-    save_path : str, optional
-        Path to save the figure
-    """
-    # Subsample
-    if len(points) > n_samples:
-        indices = np.random.choice(len(points), n_samples, replace=False)
-        pts = points[indices]
-        cols = colors[indices]
-    else:
-        pts = points
-        cols = colors
-    
-    fig = plt.figure(figsize=(12, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    
-    ax.scatter(pts[:, 0], pts[:, 2], pts[:, 1], 
-               c=cols, s=5, alpha=1.0, edgecolors='none')
-    
-    ax.set_xlabel('X (meters)', fontsize=14)
-    ax.set_ylabel('Z - Depth (meters)', fontsize=14)
-    ax.set_zlabel('Y (meters)', fontsize=14)
-    ax.set_title(title, fontsize=16, fontweight='bold')
-    ax.view_init(elev=elev, azim=azim)
-    
-    # Set equal aspect ratio
-    max_range = np.array([
-        pts[:, 0].max() - pts[:, 0].min(),
-        pts[:, 2].max() - pts[:, 2].min(),
-        pts[:, 1].max() - pts[:, 1].min()
-    ]).max() / 2.0
-    
-    mid_x = (pts[:, 0].max() + pts[:, 0].min()) * 0.5
-    mid_y = (pts[:, 2].max() + pts[:, 2].min()) * 0.5
-    mid_z = (pts[:, 1].max() + pts[:, 1].min()) * 0.5
-    
-    ax.set_xlim(mid_x - max_range, mid_x + max_range)
-    ax.set_ylim(mid_y - max_range, mid_y + max_range)
-    ax.set_zlim(mid_z - max_range, mid_z + max_range)
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=200, bbox_inches='tight', facecolor='white')
-        print(f"Saved: {save_path}")
-    
-    plt.show()
-
-
-# =============================================================================
-# Utility Functions
-# =============================================================================
 
 def save_pointcloud_ply(points, colors, filename):
-    """
-    Save point cloud to PLY file format.
-    
-    Parameters
-    ----------
-    points : np.ndarray
-        3D points of shape (N, 3)
-    colors : np.ndarray
-        RGB colors of shape (N, 3), values in [0, 1]
-    filename : str
-        Output filename (should end with .ply)
-    """
+    """保存点云为 PLY 文件"""
     colors_uint8 = (colors * 255).astype(np.uint8)
     
     with open(filename, 'w') as f:
-        # Write PLY header
         f.write("ply\n")
         f.write("format ascii 1.0\n")
         f.write(f"element vertex {len(points)}\n")
@@ -301,177 +314,120 @@ def save_pointcloud_ply(points, colors, filename):
         f.write("property uchar blue\n")
         f.write("end_header\n")
         
-        # Write point data
         for i in range(len(points)):
             f.write(f"{points[i, 0]:.6f} {points[i, 1]:.6f} {points[i, 2]:.6f} ")
             f.write(f"{colors_uint8[i, 0]} {colors_uint8[i, 1]} {colors_uint8[i, 2]}\n")
     
-    print(f"Saved point cloud to: {filename}")
-
-
-def create_synthetic_data(H=480, W=640, intrinsics=None):
-    """
-    Create synthetic RGBD data for testing.
-    
-    Parameters
-    ----------
-    H : int
-        Image height
-    W : int
-        Image width
-    intrinsics : dict, optional
-        Camera intrinsics. If None, default values are used.
-    
-    Returns
-    -------
-    rgb_image : np.ndarray
-        Synthetic RGB image
-    depth_image : np.ndarray
-        Synthetic depth image
-    object_mask : np.ndarray
-        Object segmentation mask
-    intrinsics : dict
-        Camera intrinsic parameters
-    """
-    if intrinsics is None:
-        intrinsics = {
-            'fx': 615.0,
-            'fy': 615.0,
-            'cx': W / 2.0,
-            'cy': H / 2.0
-        }
-    
-    np.random.seed(42)
-    
-    u_grid, v_grid = np.meshgrid(np.arange(W), np.arange(H))
-    
-    # Background depth
-    depth_image = np.ones((H, W)) * 3.0
-    
-    # Create circular object in center
-    center_u, center_v = W // 2, H // 2
-    radius = min(H, W) // 6
-    dist_from_center = np.sqrt((u_grid - center_u)**2 + (v_grid - center_v)**2)
-    
-    # Object mask
-    object_mask = (dist_from_center < radius).astype(np.uint8)
-    
-    # Sphere-like depth (closer in center)
-    sphere_depth = 1.5 - 0.3 * np.sqrt(np.maximum(0, 1 - (dist_from_center / radius)**2))
-    depth_image[object_mask > 0] = sphere_depth[object_mask > 0]
-    
-    # Create RGB image with color gradient
-    rgb_image = np.ones((H, W, 3), dtype=np.uint8) * 50  # Dark background
-    
-    for v in range(H):
-        for u in range(W):
-            if object_mask[v, u] > 0:
-                # Color gradient: red -> green -> blue
-                r = int(255 * (1 - (u - center_u + radius) / (2 * radius)))
-                g = int(255 * (1 - abs(v - center_v) / radius))
-                b = int(255 * (u - center_u + radius) / (2 * radius))
-                rgb_image[v, u] = [
-                    np.clip(r, 0, 255),
-                    np.clip(g, 0, 255),
-                    np.clip(b, 0, 255)
-                ]
-    
-    return rgb_image, depth_image, object_mask, intrinsics
+    print(f"保存: {filename}")
 
 
 # =============================================================================
-# Main Demo
+# 主程序
 # =============================================================================
+
 if __name__ == "__main__":
+    
+    # =========================================================================
+    # 配置路径 - 根据你的目录结构
+    # =========================================================================
+    
+    # LM-O 数据集根目录
+    LMO_ROOT = "lmo"  # 修改为你的实际路径
+    
+    # 场景和帧编号
+    SCENE_ID = "000002"
+    FRAME_ID = "000000"
+    OBJECT_ID = "000000"
+    
+    # 构建文件路径（根据你的目录结构）
+    camera_json_path = os.path.join(LMO_ROOT, "lmo", "camera.json")  # lmo/lmo/camera.json
+    rgb_path = os.path.join(LMO_ROOT, "test", SCENE_ID, "rgb", f"{FRAME_ID}.png")
+    depth_path = os.path.join(LMO_ROOT, "test", SCENE_ID, "depth", f"{FRAME_ID}.png")
+    mask_path = os.path.join(LMO_ROOT, "test", SCENE_ID, "mask_visib", f"{FRAME_ID}_{OBJECT_ID}.png")
+    
     print("=" * 70)
-    print("Task 1: RGBD to Colored 3D Point Cloud Conversion")
+    print("Task 1: LM-O Dataset - RGBD to 3D Point Cloud (Using K^(-1) Matrix)")
     print("=" * 70)
+    print(f"\n文件路径:")
+    print(f"  相机参数: {camera_json_path}")
+    print(f"  RGB 图像: {rgb_path}")
+    print(f"  深度图:   {depth_path}")
+    print(f"  物体掩码: {mask_path}")
     
-    # -------------------------------------------------------------------------
-    # Step 1: Create or load data
-    # -------------------------------------------------------------------------
-    print("\n[Step 1] Creating synthetic RGBD data...")
+    # =========================================================================
+    # 配置输出目录
+    # =========================================================================
+    OUTPUT_DIR = "lmo_cloud_point"
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    print(f"结果将保存到: {OUTPUT_DIR}")
+
+    # =========================================================================
+    # 第1步：加载相机参数
+    # =========================================================================
+    camera_params = load_lmo_camera(camera_json_path)
     
-    rgb_image, depth_image, object_mask, intrinsics = create_synthetic_data()
+    # =========================================================================
+    # 第2步：构建内参矩阵 K 和 K^(-1)
+    # =========================================================================
+    K = build_intrinsic_matrix(camera_params)
+    K_inv = compute_K_inverse(K)
     
-    print(f"  - RGB image shape: {rgb_image.shape}")
-    print(f"  - Depth image shape: {depth_image.shape}")
-    print(f"  - Object mask shape: {object_mask.shape}")
-    print(f"  - Camera intrinsics: fx={intrinsics['fx']}, fy={intrinsics['fy']}, "
-          f"cx={intrinsics['cx']}, cy={intrinsics['cy']}")
+    # =========================================================================
+    # 第3步：加载图像数据
+    # =========================================================================
+    rgb_image = load_rgb_image(rgb_path)
+    depth_in_meters = load_depth_image(depth_path, camera_params['depth_scale'])
+    mask = load_mask(mask_path)
     
-    # Print intrinsic matrix
-    K = get_intrinsic_matrix(intrinsics)
-    print(f"\n  Camera Intrinsic Matrix K:")
-    print(f"    [{K[0, 0]:8.2f} {K[0, 1]:8.2f} {K[0, 2]:8.2f}]")
-    print(f"    [{K[1, 0]:8.2f} {K[1, 1]:8.2f} {K[1, 2]:8.2f}]")
-    print(f"    [{K[2, 0]:8.2f} {K[2, 1]:8.2f} {K[2, 2]:8.2f}]")
+    # =========================================================================
+    # 第4步：可视化输入数据
+    # =========================================================================
+    visualize_input_data(rgb_image, depth_in_meters, mask, 
+                         save_path=os.path.join(OUTPUT_DIR, "lmo_input_data.png"))
     
-    # -------------------------------------------------------------------------
-    # Step 2: Visualize input data
-    # -------------------------------------------------------------------------
-    print("\n[Step 2] Visualizing input data...")
-    visualize_input_data(rgb_image, depth_image, object_mask, 
-                         save_path="input_data.png")
+    # =========================================================================
+    # 第5步：使用 K^(-1) 矩阵进行 RGBD 转 3D 点云
+    # =========================================================================
+    points, colors = rgbd_to_pointcloud_matrix(
+        rgb_image, depth_in_meters, K_inv, camera_params, mask
+    )
     
-    # -------------------------------------------------------------------------
-    # Step 3: Convert RGBD to 3D point cloud
-    # -------------------------------------------------------------------------
-    print("\n[Step 3] Converting RGBD to 3D point cloud...")
+    # =========================================================================
+    # 第6步：可视化点云
+    # =========================================================================
+    visualize_pointcloud(
+        points, colors, 
+        title=f"LM-O Scene {SCENE_ID} Frame {FRAME_ID}\nTarget Object Point Cloud (Using K⁻¹ Matrix)",
+        save_path=os.path.join(OUTPUT_DIR, "lmo_pointcloud.png")
+    )
     
-    points, colors = rgbd_to_pointcloud(rgb_image, depth_image, intrinsics, 
-                                        mask=object_mask)
+    # =========================================================================
+    # 第7步：保存点云
+    # =========================================================================
+    save_pointcloud_ply(points, colors, os.path.join(OUTPUT_DIR, "lmo_target_object.ply"))
     
-    print(f"  - Generated {len(points)} 3D points")
-    print(f"  - Points shape: {points.shape} (N x 3: X, Y, Z)")
-    print(f"  - Colors shape: {colors.shape} (N x 3: R, G, B)")
-    print(f"  - X range: [{points[:, 0].min():.4f}, {points[:, 0].max():.4f}] meters")
-    print(f"  - Y range: [{points[:, 1].min():.4f}, {points[:, 1].max():.4f}] meters")
-    print(f"  - Z range: [{points[:, 2].min():.4f}, {points[:, 2].max():.4f}] meters")
-    
-    # -------------------------------------------------------------------------
-    # Step 4: Visualize colored point cloud
-    # -------------------------------------------------------------------------
-    print("\n[Step 4] Visualizing colored 3D point cloud...")
-    
-    # Multi-view visualization
-    visualize_colored_pointcloud(points, colors, 
-                                  title="Target Object: Colored Point Cloud",
-                                  save_path="colored_pointcloud_multiview.png")
-    
-    # Single high-quality view
-    visualize_pointcloud_single(points, colors,
-                                 title="Target Object Point Cloud\n(Lifted from RGBD using camera intrinsics)",
-                                 save_path="colored_pointcloud_main.png")
-    
-    # -------------------------------------------------------------------------
-    # Step 5: Save point cloud to file
-    # -------------------------------------------------------------------------
-    print("\n[Step 5] Saving point cloud to PLY file...")
-    save_pointcloud_ply(points, colors, "target_object_pointcloud.ply")
-    
-    # -------------------------------------------------------------------------
-    # Summary
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # 完成
+    # =========================================================================
     print("\n" + "=" * 70)
-    print("TASK 1 COMPLETE!")
+    print("Task 1 完成!")
     print("=" * 70)
     print(f"""
-Summary:
---------
-- Input: RGBD image ({rgb_image.shape[1]}x{rgb_image.shape[0]}) + Object mask
-- Output: Colored 3D point cloud ({len(points)} points)
-- Each point has: XYZ coordinates (meters) + RGB color
+使用的数学公式:
 
-Output files:
--------------
-1. input_data.png           - Visualization of input RGB, depth, and mask
-2. colored_pointcloud_multiview.png - Point cloud from multiple viewpoints
-3. colored_pointcloud_main.png      - High-quality single view
-4. target_object_pointcloud.ply     - Point cloud file (can open in MeshLab, CloudCompare)
+    内参矩阵 K:
+    {K}
 
-The point cloud can now be used for:
-- Feature extraction
-- Correspondence matching with query object
-- 6D pose estimation via RANSAC
+    K 的逆矩阵 K^(-1):
+    {K_inv}
+
+    反投影公式:
+    [X]            [u]
+    [Y] = Z × K^(-1) × [v]
+    [Z]            [1]
+
+输出文件:
+  1. lmo_input_data.png    - 输入数据可视化
+  2. lmo_pointcloud.png    - 3D 点云可视化
+  3. lmo_target_object.ply - 点云文件
 """)

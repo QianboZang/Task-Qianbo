@@ -18,6 +18,7 @@ segmentation/
 pose/
 lmo_compare_pose/
 lmo_compare_segmentation/
+lmo_cloud_point/
 colored_pointcloud_main.png
 colored_pointcloud_multiview.png
 input_data.png
