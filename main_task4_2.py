@@ -1,10 +1,3 @@
-"""
-Task 4: Pose Estimation Methods Comparison Under Occlusion
-分析不同姿态估计方法在强遮挡下的行为差异
-
-直接运行: python task4_pose_analysis.py
-"""
-
 import json
 import numpy as np
 import pandas as pd

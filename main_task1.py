@@ -1,36 +1,3 @@
-"""
-Task 1: RGBD to 3D Colored Point Cloud Conversion
-==================================================
-
-This script converts RGBD pixels to a 3D colored point cloud using camera intrinsic parameters.
-
-Mathematical Background:
-------------------------
-Given an RGBD image and camera intrinsics, each pixel (u, v) with depth d can be 
-"lifted" (back-projected) to 3D coordinates (X, Y, Z) using:
-
-    X = (u - cx) * d / fx
-    Y = (v - cy) * d / fy
-    Z = d
-
-Where:
-    - (fx, fy): focal lengths in pixels
-    - (cx, cy): principal point (optical center)
-    - (u, v): pixel coordinates
-    - d: depth value at that pixel
-
-Usage:
-------
-1. With your own data:
-    points, colors = rgbd_to_pointcloud(rgb_image, depth_image, intrinsics, mask)
-    
-2. Run this script directly to see a demo with synthetic data:
-    python task1_rgbd_to_pointcloud.py
-
-Author: Claude (Anthropic)
-Date: 2024
-"""
-
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D

@@ -1,10 +1,3 @@
-"""
-Task 5: Failure Case Analysis
-分析失败案例的共同趋势
-
-直接运行: python task5_failure_analysis.py
-"""
-
 import json
 import numpy as np
 import pandas as pd

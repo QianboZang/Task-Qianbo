@@ -1,9 +1,3 @@
-"""
-Task 3: LM-O Pose Estimation Analysis with K-Means Clustering
-- 使用K-Means对visib_fract进行聚类（3类）
-- 分析遮挡与位姿估计置信度的相关性
-"""
-
 import json
 import os
 import numpy as np
