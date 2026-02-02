@@ -3,10 +3,6 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
 
-# =============================================================================
-# Core Function: RGBD to Point Cloud Conversion
-# =============================================================================
-
 def rgbd_to_pointcloud(rgb_image, depth_image, intrinsics, mask=None):
     """
     Convert RGBD image to colored 3D point cloud.
@@ -102,7 +98,6 @@ def get_intrinsic_matrix(intrinsics):
 # =============================================================================
 # Visualization Functions
 # =============================================================================
-
 def visualize_input_data(rgb_image, depth_image, mask=None, save_path=None):
     """
     Visualize the input RGBD data and mask.
@@ -387,7 +382,6 @@ def create_synthetic_data(H=480, W=640, intrinsics=None):
 # =============================================================================
 # Main Demo
 # =============================================================================
-
 if __name__ == "__main__":
     print("=" * 70)
     print("Task 1: RGBD to Colored 3D Point Cloud Conversion")
