@@ -79,6 +79,5 @@ There is a strong statistically significant **positive correlation** between obj
 |--------|----------------------|--------------------------|
 | Pearson r | 0.6015 | **0.6888** (stronger) |
 | Low → Heavy degradation | 27.6% | **34.0%** (more severe) |
-| High Conf Rate drop | 25.9 pp | **81.3 pp** (catastrophic) |
 
 Pose estimation is **more sensitive to occlusion** than segmentation. 
