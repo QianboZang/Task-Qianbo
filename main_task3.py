@@ -14,7 +14,7 @@ from sklearn.cluster import KMeans
 
 # ============== 配置 ==============
 LMO_BASE = "./lmo"
-RESULTS_CSV = "WAPR.v2/waprv2multi-2d-detections_lmo-test.csv"
+RESULTS_CSV = "pose/waprv2multi-2d-detections_lmo-test.csv"
 GT_INFO_PATH = os.path.join(LMO_BASE, "test/000002/scene_gt_info.json")
 GT_PATH = os.path.join(LMO_BASE, "test/000002/scene_gt.json")
 OUTPUT_DIR = "./lmo_pose_analysis"
