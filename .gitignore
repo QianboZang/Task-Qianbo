@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+lmo/
+lmo_visualizations/
+lmo_evaluation/
+lmo_occlusion/
+lmo_compare/
+lmo_pose_analysis/
+segmentation/
+pose/
+lmo_compare_pose/
+lmo_compare_segmentation/
+colored_pointcloud_main.png
+colored_pointcloud_multiview.png
+input_data.png
+target_object_pointcloud.ply
+task4_pose_results.csv
+task5_pose_failures.csv
+task5_seg_failures.csv
