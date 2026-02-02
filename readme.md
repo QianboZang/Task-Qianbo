@@ -1,8 +1,7 @@
 # Task 2: Segmentation Accuracy vs. Occlusion Analysis on LM-O Dataset
 **Dataset**: LM-O (Linemod-Occluded) from BOP Challenge
 
-## Methodology
-### Occlusion Clustering (K-Means)
+## Occlusion Clustering (K-Means)
 We used **K-Means clustering (k=3)** to automatically partition objects into three occlusion groups:
 | Cluster | Visibility Range | Cluster Center | Interpretation |
 |---------|------------------|----------------|----------------|
@@ -10,8 +9,7 @@ We used **K-Means clustering (k=3)** to automatically partition objects into thr
 | **Medium Occlusion** | 0.59 - 0.84 | 0.734 | Partial occlusion |
 | **Heavy Occlusion** | 0.08 - 0.58 | 0.424 | Significant occlusion |
 
-## Results
-### Segmentation Accuracy by Occlusion Level
+## Segmentation Accuracy by Occlusion Level
 | Occlusion Level | Sample Count | Mean IoU | Std IoU | Detection Rate |
 |-----------------|--------------|----------|---------|----------------|
 | **Low** | 809 | 0.8258 | ±0.0875 | 99.5% |
@@ -23,7 +21,7 @@ We used **K-Means clustering (k=3)** to automatically partition objects into thr
    - Medium → Heavy: **-20.0%** IoU decrease
    - Total degradation (Low → Heavy): **-27.6%** IoU
 
-### Correlation Analysis
+## Correlation Analysis
 
 | Correlation Type | Coefficient (r) | p-value | Interpretation |
 |------------------|-----------------|---------|----------------|
